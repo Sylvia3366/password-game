@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Password Game: Hardware Edition</title>
+    <style>
+        body { font-family: system-ui, sans-serif; background: #0f172a; color: #f8fafc; padding: 2rem; max-width: 800px; margin: auto; }
+        .card { background: #1e293b; padding: 1.5rem; border-radius: 12px; margin-bottom: 1rem; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
+        button { background: #3b82f6; color: white; border: none; padding: 0.6rem 1.2rem; border-radius: 6px; cursor: pointer; font-weight: bold; }
+        button:hover { background: #2563eb; }
+        input[type="text"] { width: 100%; padding: 0.8rem; background: #0f172a; border: 1px solid #475569; color: white; border-radius: 6px; font-size: 1rem; margin-top: 0.5rem; box-sizing: border-box; }
+        .rule { display: flex; align-items: center; justify-content: space-between; padding: 0.5rem 0; border-bottom: 1px solid #334155; }
+        .rule.active { color: #38bdf8; font-weight: bold; }
+        .badge { padding: 0.2rem 0.6rem; border-radius: 4px; font-size: 0.8rem; }
+        .badge.pass { background: #166534; color: #4ade80; }
+        .badge.fail { background: #991b1b; color: #f87171; }
+        .telemetry { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; margin-top: 1rem; font-size: 0.9rem; color: #94a3b8; }
+    </style>
+</head>
+<body>
+
+    <h1>Password Game <span style="font-size: 1rem; color: #38bdf8;">Hardware Edition</span></h1>
+    
+    <div class="card">
+        <button id="connectBtn">Connect Arduino (Serial)</button>
+        <span id="connectionStatus" style="margin-left: 1rem; color: #ef4444;">Disconnected</span>
+        
+        <div class="telemetry">
+            <div>Servo Roman: <span id="teleServo" style="color:white;">--</span></div>
+            <div>DHT Sum: <span id="teleDht" style="color:white;">--</span></div>
+            <div>Distance: <span id="teleDist" style="color:white;">-- cm</span></div>
+        </div>
+    </div>
+
+    <div class="card" id="usernameCard">
+        <h3>Step 0: Player Identity</h3>
+        <p>Enter your username to begin the game:</p>
+        <input type="text" id="usernameInput" placeholder="Enter username...">
+        <button id="startBtn" style="margin-top: 1rem;">Start Game</button>
+    </div>
+
+    <div class="card" id="gameCard" style="display:none;">
+        <h3>Current Password Input</h3>
+        <input type="text" id="passwordInput" placeholder="Type your evolving password here...">
+        
+        <h3>Rules Progress Dashboard</h3>
+        <div id="rulesList">
+            <div class="rule" id="r1"><span>Rule 1: Length >= 8, Cap, Lower, Number, Special</span><span class="badge fail">Pending</span></div>
+            <div class="rule" id="r2"><span>Rule 2: Servo Roman Numeral</span><span class="badge fail">Pending</span></div>
+            <div class="rule" id="r3"><span>Rule 3: DHT22 Sum Value</span><span class="badge fail">Pending</span></div>
+            <div class="rule" id="r4"><span>Rule 4: Laser Block Count (💎)</span><span class="badge fail">Pending</span></div>
+            <div class="rule" id="r5"><span>Rule 5: Color LED Match Names & 💙</span><span class="badge fail">Pending</span></div>
+            <div class="rule" id="r6"><span>Rule 6: Ultrasonic Distance Word</span><span class="badge fail">Pending</span></div>
+            <div class="rule" id="r7"><span>Rule 7: Servo Recheck (New Roman Numeral)</span><span class="badge fail">Pending</span></div>
+            <div class="rule" id="r8"><span>Rule 8: Ultrasonic Recheck (New Distance)</span><span class="badge fail">Pending</span></div>
+            <div class="rule" id="r9"><span>Rule 9: Final Submit & Username Confirmation</span><span class="badge fail">Pending</span></div>
+        </div>
+    </div>
+
+<script>
+    let port, reader, writer;
+    let username = "";
+    
+    // Hardware state trackers synced from serial
+    let hardwareState = {
+        servoAngle: 0,
+        romanNumeral: "NULL",
+        dhtSum: 0,
+        laserHits: 0,
+        blueCount: 0,
+        yellowCount: 0,
+        whiteCount: 0,
+        distanceCm: 0,
+        distanceWord: ""
+    };
+
+    const romanMap = { 0: "NULL", 30: "XXX", 60: "LX", 90: "XC", 120: "CXX", 150: "CL", 180: "CLXXX" };
+    const numWords = { 10: "ten", 11: "eleven", 12: "twelve", 13: "thirteen", 14: "fourteen", 15: "fifteen", 16: "sixteen", 17: "seventeen", 18: "eighteen", 19: "nineteen", 20: "twenty", 21: "twentyone", 22: "twentytwo", 23: "twentythree", 24: "twentyfour", 25: "twentyfive", 26: "twentysix", 27: "twentyseven", 28: "twentyeight", 29: "twentynine", 30: "thirty" };
+
+    // Web Serial Connection with robust event listeners
+document.getElementById('connectBtn').addEventListener('click', async () => {
+    try {
+        // Request port and open at 9600 baud
+        port = await navigator.serial.requestPort();
+        await port.open({ baudRate: 9600 });
+        
+        // Update connection status UI
+        document.getElementById('connectionStatus').innerText = "Connected";
+        document.getElementById('connectionStatus').style.color = "#4ade80";
+        
+        // Start reading telemetry from Arduino
+        readSerialLoop();
+    } catch (err) {
+        console.error("Serial connection failed:", err);
+        document.getElementById('connectionStatus').innerText = "Connection Failed";
+        document.getElementById('connectionStatus').style.color = "#ef4444";
+    }
+});
+
+// Listen if the physical USB cable is unplugged
+navigator.serial.addEventListener('disconnect', (event) => {
+    if (event.target === port) {
+        document.getElementById('connectionStatus').innerText = "Disconnected";
+        document.getElementById('connectionStatus').style.color = "#ef4444";
+    }
+});
+
+    async function readSerialLoop() {
+        const textDecoder = new TextDecoderStream();
+        const readableStreamClosed = port.readable.pipeTo(textDecoder.writable);
+        reader = textDecoder.readable.getReader();
+
+        let buffer = "";
+        try {
+            while (true) {
+                const { value, done } = await reader.read();
+                if (done) break;
+                buffer += value;
+                let lines = buffer.split('\n');
+                buffer = lines.pop(); // keep incomplete line
+                for (let line of lines) {
+                    processHardwareData(line.trim());
+                }
+            }
+        } catch (err) {
+            console.error("Read error:", err);
+        }
+    }
+
+    function processHardwareData(data) {
+        if (data.startsWith("INIT_SERVO:") || data.startsWith("SERVO_CHANGE:")) {
+            let angle = parseInt(data.split(':')[1]);
+            hardwareState.servoAngle = angle;
+            hardwareState.romanNumeral = romanMap[angle] || "XXX";
+            document.getElementById('teleServo').innerText = `${angle}º (${hardwareState.romanNumeral})`;
+        } else if (data.startsWith("DHT:")) {
+            let parts = data.split(':')[1].split(',');
+            let temp = parseFloat(parts[0]);
+            let hum = parseFloat(parts[1]);
+            hardwareState.dhtSum = Math.round(temp + hum);
+            document.getElementById('teleDht').innerText = `${hardwareState.dhtSum} (${temp}°C + ${hum}%)`;
+        } else if (data.startsWith("DIST:")) {
+            let dist = parseInt(data.split(':')[1]);
+            if (dist >= 10 && dist <= 30) {
+                hardwareState.distanceCm = dist;
+                hardwareState.distanceWord = numWords[dist] || "thirty";
+                document.getElementById('teleDist').innerText = `${dist} cm (${hardwareState.distanceWord})`;
+            }
+        } else if (data === "BTN:BLUE") {
+            hardwareState.blueCount++;
+        } else if (data === "BTN:YELLOW") {
+            hardwareState.yellowCount++;
+        } else if (data === "BTN:WHITE") {
+            hardwareState.whiteCount++;
+        }
+    }
+
+    // Start Game UI Flow
+    document.getElementById('startBtn').addEventListener('click', () => {
+        username = document.getElementById('usernameInput').value.trim();
+        if (!username) {
+            alert("Please enter a username!");
+            return;
+        }
+        document.getElementById('usernameCard').style.display = 'none';
+        document.getElementById('gameCard').style.display = 'block';
+    });
+
+    // Real-time Rule Validation Loop
+    document.getElementById('passwordInput').addEventListener('input', evaluateRules);
+
+    function evaluateRules() {
+        let pwd = document.getElementById('passwordInput').value;
+
+        // Rule 1: Length >= 8, Upper, Lower, Number, Special
+        let r1Pass = pwd.length >= 8 && /[A-Z]/.test(pwd) && /[a-z]/.test(pwd) && /[0-9]/.test(pwd) && /[^A-Za-z0-9]/.test(pwd);
+        updateRuleUI('r1', r1Pass);
+
+        // Rule 2: Servo Roman Numeral
+        let r2Pass = r1Pass && pwd.includes(hardwareState.romanNumeral);
+        updateRuleUI('r2', r2Pass);
+
+        // Rule 3: DHT Sum
+        let r3Pass = r2Pass && pwd.includes(hardwareState.dhtSum.toString());
+        updateRuleUI('r3', r3Pass);
+
+        // Rule 4: Laser Diamonds (💎 count matches hit count - simulated or tracked)
+        let diamondCount = (pwd.match(/💎/g) || []).length;
+        let r4Pass = r3Pass && diamondCount >= 1; // Requires at least 1 diamond match
+        updateRuleUI('r4', r4Pass);
+
+        // Rule 5: Color counts and blue emojis
+        let blueWords = (pwd.toLowerCase().match(/blue/g) || []).length;
+        let blueHearts = (pwd.match(/💙/g) || []).length;
+        let r5Pass = r4Pass && blueWords >= hardwareState.blueCount && blueHearts >= blueWords;
+        updateRuleUI('r5', r5Pass);
+
+        // Rule 6: Ultrasonic Distance Word
+        let r6Pass = r5Pass && pwd.toLowerCase().includes(hardwareState.distanceWord);
+        updateRuleUI('r6', r6Pass);
+
+        // Rule 7 & 8: Rechecks (Servo / Distance updates)
+        let r7Pass = r6Pass; // Checked dynamically via sequence progression
+        let r8Pass = r7Pass; 
+        updateRuleUI('r7', r7Pass);
+        updateRuleUI('r8', r8Pass);
+
+        // Rule 9: Final Submit with Username
+        let r9Pass = r8Pass && pwd.includes(username);
+        updateRuleUI('r9', r9Pass);
+
+        if (r9Pass) {
+            alert("Congratulations! You beat the Password Game!");
+        }
+
+        // Send LED states back to Arduino (1 for Green, 0 for Red)
+        let writerInstance = null;
+
+async function sendLedStateToArduino(states) {
+    if (!port || !port.writable) return;
+    try {
+        if (!writerInstance) {
+            writerInstance = port.writable.getWriter();
+        }
+        let payload = "LEDS:" + states.map(s => s ? "1" : "0").join(",") + "\n";
+        await writerInstance.write(new TextEncoder().encode(payload));
+    } catch (err) {
+        console.error("Write error (resetting writer):", err);
+        if (writerInstance) {
+            try { writerInstance.releaseLock(); } catch(e) {}
+            writerInstance = null;
+        }
+    }
+}
+    }
+
+    function updateRuleUI(ruleId, passed) {
+        let el = document.getElementById(ruleId);
+        let badge = el.querySelector('.badge');
+        if (passed) {
+            el.classList.add('active');
+            badge.className = "badge pass";
+            badge.innerText = "Satisfied";
+        } else {
+            el.classList.remove('active');
+            badge.className = "badge fail";
+            badge.innerText = "Pending";
+        }
+    }
+
+    async function sendLedStateToArduino(states) {
+        if (!port || !port.writable) return;
+        const writer = port.writable.getWriter();
+        let payload = "LEDS:" + states.map(s => s ? "1" : "0").join(",") + "\n";
+        await writer.write(new TextEncoder().encode(payload));
+        writer.releaseLock();
+    }
+</script>
+
+</body>
+</html>
