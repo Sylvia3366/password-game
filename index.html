@@ -144,24 +144,26 @@
 
     document.getElementById('passwordInput').addEventListener('input', evaluateRules);
 
-    function evaluateRules() {
+function evaluateRules() {
         let pwd = document.getElementById('passwordInput').value;
 
         let r1Pass = pwd.length >= 8 && /[A-Z]/.test(pwd) && /[a-z]/.test(pwd) && /[0-9]/.test(pwd) && /[^A-Za-z0-9]/.test(pwd);
-        let r2Pass = r1Pass && pwd.includes(hardwareState.romanNumeral);
-        let r3Pass = r2Pass && pwd.includes(hardwareState.dhtSum.toString());
-        let r4Pass = r3Pass && (pwd.match(/💎/g) || []).length >= hardwareState.diamondCount && hardwareState.diamondCount > 0;
+        
+        // Rule 2 checks if password includes the current active Roman numeral for the servo angle
+        let r2Pass = currentActiveRule >= 2 && r1Pass && pwd.includes(hardwareState.romanNumeral);
+        
+        let r3Pass = currentActiveRule >= 3 && r2Pass && pwd.includes(hardwareState.dhtSum.toString());
+        let r4Pass = currentActiveRule >= 4 && r3Pass && (pwd.match(/💎/g) || []).length >= hardwareState.diamondCount && hardwareState.diamondCount > 0;
         
         let blueWords = (pwd.toLowerCase().match(/blue/g) || []).length;
         let blueHearts = (pwd.match(/💙/g) || []).length;
-        let r5Pass = r4Pass && blueWords >= hardwareState.blueCount && blueHearts >= blueWords;
+        let r5Pass = currentActiveRule >= 5 && r4Pass && blueWords >= hardwareState.blueCount && blueHearts >= blueWords;
         
-        let r6Pass = r5Pass && pwd.toLowerCase().includes(hardwareState.distanceWord);
-        let r7Pass = r6Pass; // Recheck servo
-        let r8Pass = r7Pass; // Recheck distance
-        let r9Pass = r8Pass && pwd.includes(username);
+        let r6Pass = currentActiveRule >= 6 && r5Pass && pwd.toLowerCase().includes(hardwareState.distanceWord);
+        let r7Pass = currentActiveRule >= 7 && r6Pass;
+        let r8Pass = currentActiveRule >= 8 && r7Pass;
+        let r9Pass = currentActiveRule >= 9 && r8Pass && pwd.includes(username);
 
-        // Check completion of current active rule and advance state machine one by one
         let passedMap = { 1: r1Pass, 2: r2Pass, 3: r3Pass, 4: r4Pass, 5: r5Pass, 6: r6Pass, 7: r7Pass, 8: r8Pass, 9: r9Pass };
 
         if (passedMap[currentActiveRule] && currentActiveRule < 9) {
@@ -174,7 +176,7 @@
             alert("Congratulations! You beat the Password Game!");
         }
 
-        // Send hardware status for the 6 check LEDs (1 = Green/LOW, 0 = Red/HIGH)
+        // Send checking LED states to Arduino (1 = Green/LOW, 0 = Red/HIGH)
         sendLedState([r1Pass, r2Pass, r3Pass, r4Pass, r5Pass, r6Pass]);
     }
 
